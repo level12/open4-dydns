@@ -1,0 +1,151 @@
+#!/usr/bin/env python
+import argparse
+from ConfigParser import SafeConfigParser
+import logging
+from os import path as osp
+import shlex
+import socket
+import subprocess
+
+log = logging.getLogger(__name__)
+
+parser = argparse.ArgumentParser()
+#parser.add_argument("--noop", action='store_true', default=False,
+#                    help="show what would happen but don't make changes")
+parser.add_argument("-v", "--verbose", action='store_true', default=False,
+                    help="include commands execute in output")
+parser.add_argument("-d", "--delete-all", action='store_true', default=False,
+                    help="delete all open4-dydns rules form iptables")
+
+cwd = osp.dirname(__file__)
+cwd_config_fpath = osp.abspath(osp.join(cwd, 'open4-dydns.conf'))
+system_config_fpath = '/etc/open4-dydns.conf'
+
+if hasattr(socket, 'setdefaulttimeout'):
+    # Set the default timeout on sockets to 5 seconds
+    socket.setdefaulttimeout(5)
+
+
+class KernelRule(object):
+    os_rules = None
+
+    def __init__(self, os_str):
+        self.os_str = os_str
+        rule_parts = shlex.split(self.os_str)
+
+        source_ip_index = rule_parts.index('-s')
+        self.source_ip, netmask = rule_parts[source_ip_index + 1].split('/')
+
+    def delete(self):
+        shell_args = shlex.split(self.os_str)
+        # os_str starts with -A INPUT to add, we want to turn -A to -D for a delete of the
+        # same argument
+        shell_args[0] = '-D'
+        shell_args.insert(0, '/sbin/iptables')
+        subprocess.call(shell_args)
+
+    @classmethod
+    def find(cls, comment):
+        for rule in cls.os_rules:
+            if comment in rule:
+                return cls(rule)
+
+    @classmethod
+    def load_from_os(cls):
+        proc = subprocess.Popen(['/sbin/iptables', '-S', 'INPUT'], stdout=subprocess.PIPE)
+        output = proc.communicate()[0]
+        cls.os_rules = output.strip().splitlines()
+        log.debug('Current iptables INPUT rules: %s', cls.os_rules)
+
+
+class HostRule(object):
+
+    def __init__(self, name, section_str):
+        self.name = name
+        self.section_str = section_str
+        self.interface, self.port, self.proto = self.section_str.split(':')
+
+        self.current_ip = None
+        self.getip()
+
+    def getip(self):
+        self.current_ip = socket.gethostbyname(self.name)
+        log.debug('found IP %s for hostname %s', self.current_ip, self.name)
+
+    def compose_comment(self):
+        return 'open4-dydns {} {}'.format(self.section_str, self.name)
+
+    def sync(self, is_delete):
+        comment = self.compose_comment()
+        kernel_rule = KernelRule.find(comment)
+
+        if kernel_rule:
+            log.debug('%s %s: found rule in iptables', self.section_str, self.name)
+            if is_delete:
+                kernel_rule.delete()
+                log.info('%s %s: iptables rule deleted', self.section_str, self.name)
+                return
+            if kernel_rule.source_ip == self.current_ip:
+                log.debug('%s %s: source IP the same, no change needed', self.section_str,
+                          self.name)
+                return
+            # IP of host is now different than iptables rule, delete it and it will get recreated
+            # below
+            log.info('%s %s: source IP different, iptables rule deleted', self.section_str,
+                     self.name)
+            kernel_rule.delete()
+        else:
+            log.debug('%s %s: NO rule found in iptables', self.section_str, self.name)
+
+        if not is_delete:
+            log.info('%s %s: adding rule to iptables for %s', self.section_str, self.name,
+                     self.current_ip)
+            self.insert_rule(comment, self.current_ip)
+
+    def insert_rule(self, comment, host_ip):
+        command_begin = ['/sbin/iptables', '-I', 'INPUT', '-i', self.interface, '-s',
+                         self.current_ip]
+        command_end = ['-j', 'ACCEPT', '-m', 'comment', '--comment', self.compose_comment()]
+
+        if self.proto in ('tcp', None):
+            tcp_command = command_begin + ['-p', 'tcp', '--dport', self.port] + command_end
+            log.debug(tcp_command)
+            subprocess.call(tcp_command)
+
+        if self.proto in ('udp', None):
+            udp_command = command_begin + ['-p', 'udp', '--dport', self.port] + command_end
+            log.debug(udp_command)
+            subprocess.call(udp_command)
+
+
+def configure_logging(verbose):
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format='%(levelname)s - %(message)s'
+    )
+
+
+def main():
+    args = parser.parse_args()
+    configure_logging(args.verbose)
+    config = SafeConfigParser(allow_no_value=True)
+    config_path = cwd_config_fpath if osp.exists(cwd_config_fpath) else system_config_fpath
+    log.debug('Reading config file: %s', config_path)
+
+    with open(config_path, 'rb') as fo:
+        config.readfp(fo)
+
+    KernelRule.load_from_os()
+
+    for section in config.sections():
+        for host_name_str in config.options(section):
+            try:
+                host_rule = HostRule(host_name_str, section)
+            except socket.error:
+                log.exception('resolving hostname %s threw an exception', host_name_str)
+                continue
+            host_rule.sync(args.delete_all)
+
+
+if __name__ == '__main__':
+    main()

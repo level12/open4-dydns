@@ -1,0 +1,4 @@
+[eth0:22:tcp]
+office.example.com
+some-host.selfip.com
+
