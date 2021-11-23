@@ -128,7 +128,7 @@ def configure_logging(verbose):
 def main():
     args = parser.parse_args()
     configure_logging(args.verbose)
-    config = SafeConfigParser(allow_no_value=True)
+    config = ConfigParser(allow_no_value=True)
     config_path = cwd_config_fpath if osp.exists(cwd_config_fpath) else system_config_fpath
     log.debug('Reading config file: %s', config_path)
 
