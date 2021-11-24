@@ -54,7 +54,7 @@ class KernelRule(object):
     def load_from_os(cls):
         proc = subprocess.Popen(['/sbin/iptables', '-S', 'INPUT'], stdout=subprocess.PIPE)
         output = proc.communicate()[0]
-        cls.os_rules = output.strip().splitlines()
+        cls.os_rules = output.decode('utf-8').strip().splitlines()
         log.debug('Current iptables INPUT rules: %s', cls.os_rules)
 
 
@@ -133,7 +133,7 @@ def main():
     log.debug('Reading config file: %s', config_path)
 
     with open(config_path, 'rb') as fo:
-        config.readfp(fo)
+        config.read_file(fo)
 
     KernelRule.load_from_os()
 
