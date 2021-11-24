@@ -132,7 +132,7 @@ def main():
     config_path = cwd_config_fpath if osp.exists(cwd_config_fpath) else system_config_fpath
     log.debug('Reading config file: %s', config_path)
 
-    with open(config_path, 'rb') as fo:
+    with open(config_path, 'r') as fo:
         config.read_file(fo)
 
     KernelRule.load_from_os()
