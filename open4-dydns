@@ -69,8 +69,11 @@ class HostRule(object):
         self.getip()
 
     def getip(self):
-        self.current_ip = socket.gethostbyname(self.name)
-        log.debug('found IP %s for hostname %s', self.current_ip, self.name)
+        try:
+            self.current_ip = socket.gethostbyname(self.name)
+            log.debug('found IP %s for hostname %s', self.current_ip, self.name)
+        except OSError:
+            log.exception('Error with hostname lookup for %s', self.name)
 
     def compose_comment(self):
         return 'open4-dydns {} {}'.format(self.section_str, self.name)
@@ -97,7 +100,7 @@ class HostRule(object):
         else:
             log.debug('%s %s: NO rule found in iptables', self.section_str, self.name)
 
-        if not is_delete:
+        if not is_delete and self.current_ip is not None:
             log.info('%s %s: adding rule to iptables for %s', self.section_str, self.name,
                      self.current_ip)
             self.insert_rule(comment, self.current_ip)
