@@ -3,6 +3,7 @@ import argparse
 from configparser import ConfigParser
 import logging
 from os import path as osp
+from pathlib import Path
 import shlex
 import socket
 import subprocess
@@ -25,6 +26,13 @@ if hasattr(socket, 'setdefaulttimeout'):
     # Set the default timeout on sockets to 5 seconds
     socket.setdefaulttimeout(5)
 
+sbin_iptables = Path('/sbin/iptables')
+sbin_iptables_legacy = Path('/sbin/iptables-legacy')
+
+# Ubuntu 22.04 uses nft by default.  We want to use legacy for now (which also works on 20.04)
+# because ferm uses the legacy tables.  On 18.04, there is no legacy bin.
+iptables_bin = str(sbin_iptables_legacy if sbin_iptables_legacy.exists() else sbin_iptables)
+
 
 class KernelRule(object):
     os_rules = None
@@ -41,7 +49,7 @@ class KernelRule(object):
         # os_str starts with -A INPUT to add, we want to turn -A to -D for a delete of the
         # same argument
         shell_args[0] = '-D'
-        shell_args.insert(0, '/sbin/iptables')
+        shell_args.insert(0, iptables_bin)
         subprocess.call(shell_args)
 
     @classmethod
@@ -52,7 +60,7 @@ class KernelRule(object):
 
     @classmethod
     def load_from_os(cls):
-        proc = subprocess.Popen(['/sbin/iptables', '-S', 'INPUT'], stdout=subprocess.PIPE)
+        proc = subprocess.Popen([iptables_bin, '-S', 'INPUT'], stdout=subprocess.PIPE)
         output = proc.communicate()[0]
         cls.os_rules = output.decode('utf-8').strip().splitlines()
         log.debug('Current iptables INPUT rules: %s', cls.os_rules)
@@ -106,7 +114,7 @@ class HostRule(object):
             self.insert_rule(comment, self.current_ip)
 
     def insert_rule(self, comment, host_ip):
-        command_begin = ['/sbin/iptables', '-I', 'INPUT', '-i', self.interface, '-s',
+        command_begin = [iptables_bin, '-I', 'INPUT', '-i', self.interface, '-s',
                          self.current_ip]
         command_end = ['-j', 'ACCEPT', '-m', 'comment', '--comment', self.compose_comment()]
 
